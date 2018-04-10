@@ -734,6 +734,142 @@ func TestNewArchiverSaveDirIncremental(t *testing.T) {
 	}
 }
 
+func TestNewArchiverSaveTree(t *testing.T) {
+	symlink := func(from, to string) func(t testing.TB) {
+		return func(t testing.TB) {
+			err := os.Symlink(from, to)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	var tests = []struct {
+		src     TestDir
+		prepare func(t testing.TB)
+		targets []string
+		want    TestDir
+	}{
+		{
+			src: TestDir{
+				"targetfile": TestFile{Content: string("foobar")},
+			},
+			targets: []string{"targetfile"},
+			want: TestDir{
+				"targetfile": TestFile{Content: string("foobar")},
+			},
+		},
+		{
+			src: TestDir{
+				"targetfile": TestFile{Content: string("foobar")},
+			},
+			prepare: symlink("targetfile", "filesymlink"),
+			targets: []string{"targetfile", "filesymlink"},
+			want: TestDir{
+				"targetfile":  TestFile{Content: string("foobar")},
+				"filesymlink": TestSymlink{Target: "targetfile"},
+			},
+		},
+		{
+			src: TestDir{
+				"dir": TestDir{
+					"subdir": TestDir{
+						"subsubdir": TestDir{
+							"targetfile": TestFile{Content: string("foobar")},
+						},
+					},
+					"otherfile": TestFile{Content: string("xxx")},
+				},
+			},
+			prepare: symlink("subdir", filepath.FromSlash("dir/symlink")),
+			targets: []string{filepath.FromSlash("dir/symlink")},
+			want: TestDir{
+				"dir": TestDir{
+					"symlink": TestSymlink{Target: "subdir"},
+				},
+			},
+		},
+		{
+			src: TestDir{
+				"dir": TestDir{
+					"subdir": TestDir{
+						"subsubdir": TestDir{
+							"targetfile": TestFile{Content: string("foobar")},
+						},
+					},
+					"otherfile": TestFile{Content: string("xxx")},
+				},
+			},
+			prepare: symlink("subdir", filepath.FromSlash("dir/symlink")),
+			targets: []string{filepath.FromSlash("dir/symlink/subsubdir")},
+			want: TestDir{
+				"dir": TestDir{
+					"symlink": TestDir{
+						"subsubdir": TestDir{
+							"targetfile": TestFile{Content: string("foobar")},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run("", func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			tempdir, repo, cleanup := prepareTempdirRepoSrc(t, test.src)
+			defer cleanup()
+
+			arch := NewNewArchiver(ctx, repo, fs.Local{})
+
+			err := arch.Valid()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			back := fs.TestChdir(t, tempdir)
+			defer back()
+
+			if test.prepare != nil {
+				test.prepare(t)
+			}
+
+			atree, err := NewTree(test.targets)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tree, err := arch.SaveTree(ctx, "/", atree, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			treeID, err := repo.SaveTree(ctx, tree)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = repo.Flush(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = repo.SaveIndex(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			want := test.want
+			if want == nil {
+				want = test.src
+			}
+			TestEnsureTree(ctx, t, "/", repo, treeID, want)
+		})
+	}
+}
+
 func TestNewArchiverSnapshot(t *testing.T) {
 	var tests = []struct {
 		name    string
