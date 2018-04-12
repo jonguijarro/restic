@@ -79,7 +79,7 @@ func createConfig(endpoint string, p []string, useHTTP bool) (interface{}, error
 	}
 
 	cfg := NewConfig()
-	cfg.Endpoint = endpoint
+	cfg.Endpoint = *endpoint + '/s3/'
 	cfg.UseHTTP = useHTTP
 	cfg.Bucket = p[0]
 	cfg.Prefix = prefix
